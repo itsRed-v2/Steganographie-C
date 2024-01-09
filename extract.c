@@ -21,8 +21,6 @@ BYTE_CHUNK_SIZE == 2 ? 0b00000011 : \
 BYTE_CHUNK_SIZE == 1 ? 0b00000001 : 0 \
 )
 
-long extractedFileSize = 226933;
-
 void printBinary(char *prefix, char byte) {
     char binaryString[] = "00000000";    
     for (int i = 0; i < 8; i++) {
@@ -32,17 +30,19 @@ void printBinary(char *prefix, char byte) {
     printf("%s%s\n", prefix, binaryString);
 }
 
-char* extractBytes(unsigned char* img, long byteCount) {
-    // Le nombre de byteChunk = le nombre de bytes multiplié par le nombre de byteChunk dans 1 byte
-    int byteChunkCount = byteCount * (8 / BYTE_CHUNK_SIZE);
-
+char* extractNextBytes(unsigned char* img, long byteCount) {
     char* buffer = calloc(byteCount, sizeof(char));
-
-    long imgIndex = 0;
     long bufferIndex = 0;
     char bytePos = 0;
 
-    for (imgIndex = 0; imgIndex < byteChunkCount; imgIndex++) {
+    // imgIndex est statique pour que la progression dans l'image soit conservée d'appel en appel
+    static long imgIndex = 0;
+    
+    // Le nombre de byteChunk = le nombre de bytes multiplié par le nombre de byteChunk dans 1 byte
+    int byteChunkCount = byteCount * (8 / BYTE_CHUNK_SIZE);
+    long targetImgIndex = imgIndex + byteChunkCount;
+
+    for (; imgIndex < targetImgIndex; imgIndex++) {
         // le byte correspondant à la valeur du composant de pixel
         char imageByte = img[imgIndex];
         // On ne veut que les derniers bits
@@ -69,7 +69,7 @@ int main() {
         return 1;
     }
 
-    // === Reading image data ===
+    // === Lecture des informations de l'image ===
 
     int width, height, channels;
     unsigned char *img = stbi_load(IMG_PATH, &width, &height, &channels, USED_CHANNELS);
@@ -82,44 +82,38 @@ int main() {
     printf("Size: %d x %d px\n", width, height);
     printf("Used channels: %d / %d\n", USED_CHANNELS, channels);
 
-    // Le nombre de composants de pixels dans l'image
-    // int imgSize = width * height * USED_CHANNELS;
+    // === Extraction du fichier ===
+    // Note: Le prefix est la zone mémoire où on écrit la valeur de filelen
 
-    // buffer = malloc(extractedFileSize * sizeof(char));
+    long filelen; // La taille du fichier en bytes
+    char prefixlen = sizeof(filelen); // La taille du prefix en bytes
+    char *prefixBuffer = extractNextBytes(img, prefixlen); // On extrait la valeur du préfix sous forme de buffer de char
+    filelen = *((long*) prefixBuffer); // On assigne la valeur (il faut caster le pointeur puis déréférencer)
 
     printf("\n");
     printf("Output file: %s%s%s\n", COLOR, OUTPUT_PATH, RESET);
-    printf("Size: %ld bytes\n", extractedFileSize);
+    printf("Size: %ld bytes\n", filelen);
 
-    // Le nombre de byteChunk = le nombre de bytes multiplié par le nombre de byteChunk dans 1 byte
-    // int byteChunkCount = extractedFileSize * (8 / BYTE_CHUNK_SIZE);
+    // On commence l'extraction du fichier <prefixLen> bytes après le début de l'image
+    // unsigned char *fileStart = img + (prefixlen * (8 / BYTE_CHUNK_SIZE));
+    char *buffer = extractNextBytes(img, filelen);
 
-    // On s'assure que l'image est assez grande pour contenir tous les byteChunk
-    // (Chaque composant de pixel peut contenir 1 byteChunk) 
-    // if (imgSize < byteChunkCount) {
-    //     printf("The image is too small to contain this file !");
-    //     return 1;
-    // }
-
+    // === Ecriture du fichier décodé ===
+    
     printf("\n");
-    printf("Processing...\n");
-
-    char *buffer = extractBytes(img, extractedFileSize);
-
-    // === Writing file ===
-
     printf("Writing the result to output file...\n");
 
     // on ouvre le fichier en mode wb: write binary
     FILE *file = fopen(OUTPUT_PATH, "wb");
     // fwrite: écriture du contenu du <buffer> en <1> bloc de longueur <extractedFileSize>,
     // et stockage du resultat dans le fichier <file>
-    fwrite(buffer, extractedFileSize, 1, file);
+    fwrite(buffer, filelen, 1, file);
 
     printf("Done.\n");
     printf("Output file: %s%s%s\n", COLOR, OUTPUT_PATH, RESET);
 
     // On libère la mémoire
+    free(prefixBuffer);
     free(buffer);
     stbi_image_free(img);
 }

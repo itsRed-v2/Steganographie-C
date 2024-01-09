@@ -11,7 +11,7 @@
 #define USED_CHANNELS 3
 
 #define IMG_PATH "files/clouds.png"
-#define FILE_PATH "files/dice-transparent.png"
+#define FILE_PATH "files/landscape.png"
 #define OUTPUT_PATH "output/out.png"
 #define BYTE_CHUNK_SIZE 4
 
@@ -22,7 +22,7 @@ BYTE_CHUNK_SIZE == 2 ? 0b00000011 : \
 BYTE_CHUNK_SIZE == 1 ? 0b00000001 : 0 \
 )
 
-char *fileBytes;
+char *buffer;
 
 void printBinary(char *prefix, char byte) {
     char binaryString[] = "00000000";    
@@ -37,7 +37,7 @@ char nextByteChunk() {
     static int index = 0;
     static int bytePos = 0;
 
-    char byteChunk = fileBytes[index];
+    char byteChunk = buffer[index];
     byteChunk >>= 8 - bytePos - BYTE_CHUNK_SIZE;
     byteChunk &= lastBitsMask;
 
@@ -56,7 +56,7 @@ int main() {
         return 1;
     }
 
-    // Reading image data
+    // Lecture des informations de l'image
 
     int width, height, channels;
     unsigned char *img = stbi_load(IMG_PATH, &width, &height, &channels, USED_CHANNELS);
@@ -78,21 +78,37 @@ int main() {
     long filelen; // Le nombre d'octets dans le fichier
 
     file = fopen(FILE_PATH, "rb"); // on ouvre le fichier en mode rb: read binary
+    if (file == NULL) {
+        printf("Error in reading the file: %s", FILE_PATH);
+        return 1;
+    }
     fseek(file, 0, SEEK_END); // On place la tête de lecture à la fin du fichier
     filelen = ftell(file); // ftell renvoie la position de la tête de lecture (ici, la longueur du fichier)
     rewind(file); // on remet la tête au début du fichier
 
-    fileBytes = malloc(filelen * sizeof(char));
+    // Note: Le prefix est la zone mémoire où on écrit la valeur de filelen
+    char prefixlen = sizeof(filelen); // La taille du prefix en bytes
+    long bufferlen = filelen + prefixlen; // La taille du buffer en bytes
+    buffer = malloc(bufferlen * sizeof(char));
+
+    // Le fichier commence <prefixlen> bytes après le buffer
+    char *fileBytes = buffer + prefixlen;
     // fread: lecture du contenu de <file> en <1> bloc de longueur <filelen>,
     // et stockage du resultat dans le buffer <fileBytes>
     fread(fileBytes, filelen, 1, file);
 
+    // On convertir le buffer (pointeur de char) en pointeur de long pour 
+    // pouvoir écrire la valeur de filelen sur les premiers bytes du buffer
+    long * filelenPointer = (long*) buffer;
+    *filelenPointer = filelen;
+
+    // On affiche les infos du fichier à encoder
     printf("\n");
     printf("Target file: %s%s%s\n", COLOR, FILE_PATH, RESET);
     printf("Size: %ld bytes\n", filelen);
 
     // Le nombre de byteChunk = le nombre de bytes multiplié par le nombre de byteChunk dans 1 byte
-    int byteChunkCount = filelen * (8 / BYTE_CHUNK_SIZE);
+    long byteChunkCount = bufferlen * (8 / BYTE_CHUNK_SIZE);
 
     // On s'assure que l'image est assez grande pour contenir tous les byteChunk
     // (Chaque composant de pixel peut contenir 1 byteChunk) 
@@ -121,7 +137,7 @@ int main() {
     printf("Writing the resulting image to output file...\n");
     // On écrit l'image au format png:
     // OUTPUT_PATH: le chemin où on enregistre l'image; width et height: la taille de l'image
-    // USED_CHANNELS: le nombre de channels utilisés dans l'image enregistrée (3 pour rgb, 4 pour rgba)
+    // USED_CHANNELS: le nombre de channels utilisés dans l'image enregistrée
     // img: le buffer contenant l'image
     // width * USED_CHANNELS: la taille (en bytes) d'une ligne de pixels sur l'image
     stbi_write_png(OUTPUT_PATH, width, height, USED_CHANNELS, img, width * USED_CHANNELS);
@@ -130,6 +146,6 @@ int main() {
     printf("Output image: %s%s%s\n", COLOR, OUTPUT_PATH, RESET);
 
     // On libère la mémoire
-    free(fileBytes);
+    free(buffer);
     stbi_image_free(img);
 }
