@@ -112,7 +112,7 @@ int main() {
 
     file = fopen(FILE_PATH, "rb"); // on ouvre le fichier en mode rb: read binary
     if (file == NULL) {
-        printf("Error in reading the file: %s", FILE_PATH);
+        printf("Error in reading the file: %s\n", FILE_PATH);
         return 1;
     }
     fseek(file, 0, SEEK_END); // On place la tête de lecture à la fin du fichier
@@ -148,7 +148,7 @@ int main() {
     // (Chaque composant de pixel peut contenir 1 byteChunk)
     // On enlève 2 à imgSize car 2 composants sont révervés pour écrire BYTE_CHUNK_SIZE_MODE
     if (imgSize - 2 < byteChunkCount) {
-        printf("The image is too small to contain this file !");
+        printf("The image is too small to contain this file !\n");
         return 1;
     }
 
