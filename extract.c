@@ -12,34 +12,36 @@
 
 #define IMG_PATH "output/out.png"
 #define OUTPUT_PATH "extracted/out.png"
-#define BYTE_CHUNK_SIZE 4
 
-#define lastBitsMask (\
-BYTE_CHUNK_SIZE == 8 ? 0b11111111 : \
-BYTE_CHUNK_SIZE == 4 ? 0b00001111 : \
-BYTE_CHUNK_SIZE == 2 ? 0b00000011 : \
-BYTE_CHUNK_SIZE == 1 ? 0b00000001 : 0 \
-)
+typedef unsigned char uchar;
 
-void printBinary(char *prefix, char byte) {
-    char binaryString[] = "00000000";    
-    for (int i = 0; i < 8; i++) {
-        if (byte & ((char) pow(2, 7-i)))
-            binaryString[i] = '1';
-    }
-    printf("%s%s\n", prefix, binaryString);
+uchar getBitAt(uchar byte, uchar index) {
+    return (byte >> index) & 1;
 }
 
-char* extractNextBytes(unsigned char* img, long byteCount) {
+void setBitAt(uchar* byte, uchar index, uchar bit) {
+    bit &= 1; // On s'assure que seul le 1er bit est différent de 0
+    const uchar mask = 1 << index;
+    *byte &= ~mask;
+    *byte |= bit << index;
+}
+
+char* extractBytes(uchar* img, long byteCount, uchar byteChunkSize, long offset) {
+    const uchar lastBitsMask = 
+        byteChunkSize == 8 ? 0b11111111 : 
+        byteChunkSize == 4 ? 0b00001111 : 
+        byteChunkSize == 2 ? 0b00000011 : 
+        byteChunkSize == 1 ? 0b00000001 : 0;
+
     char* buffer = calloc(byteCount, sizeof(char));
     long bufferIndex = 0;
     char bytePos = 0;
 
     // imgIndex est statique pour que la progression dans l'image soit conservée d'appel en appel
-    static long imgIndex = 0;
+    long imgIndex = offset;
     
     // Le nombre de byteChunk = le nombre de bytes multiplié par le nombre de byteChunk dans 1 byte
-    int byteChunkCount = byteCount * (8 / BYTE_CHUNK_SIZE);
+    int byteChunkCount = byteCount * (8 / byteChunkSize);
     long targetImgIndex = imgIndex + byteChunkCount;
 
     for (; imgIndex < targetImgIndex; imgIndex++) {
@@ -48,12 +50,12 @@ char* extractNextBytes(unsigned char* img, long byteCount) {
         // On ne veut que les derniers bits
         char byteChunk = imageByte & lastBitsMask;
         // On décale le byteChunk pour qu'il soit au bon endroit dans le byte
-        byteChunk <<= 8 - bytePos - BYTE_CHUNK_SIZE;
+        byteChunk <<= 8 - bytePos - byteChunkSize;
         // On ajoute le byteChunk au byte courant du buffer
-        // (on est assurés que byteChunk ne dépasse pas le nombre de bits de BYTE_CHUNK_SIZE)
+        // (on est assurés que byteChunk ne dépasse pas le nombre de bits de byteChunkSize)
         buffer[bufferIndex] |= byteChunk;
 
-        bytePos += BYTE_CHUNK_SIZE;
+        bytePos += byteChunkSize;
         if (bytePos >= 8) {
             bytePos = 0;
             bufferIndex++;
@@ -64,15 +66,10 @@ char* extractNextBytes(unsigned char* img, long byteCount) {
 }
 
 int main() {
-    if (8 % BYTE_CHUNK_SIZE != 0) {
-        printf("Byte chunk size must be a divisor of 8, but found %d\n", BYTE_CHUNK_SIZE);
-        return 1;
-    }
-
     // === Lecture des informations de l'image ===
 
     int width, height, channels;
-    unsigned char *img = stbi_load(IMG_PATH, &width, &height, &channels, USED_CHANNELS);
+    uchar *img = stbi_load(IMG_PATH, &width, &height, &channels, USED_CHANNELS);
     if (img == NULL) {
         printf("Error in loading the image\n");
         return 1;        
@@ -82,21 +79,33 @@ int main() {
     printf("Size: %d x %d px\n", width, height);
     printf("Used channels: %d / %d\n", USED_CHANNELS, channels);
 
+    // Lecture du byteChunkSizeMode et calcul de byteChunkSize
+
+    uchar byteChunkSizeMode = 0;
+    setBitAt(&byteChunkSizeMode, 0, getBitAt(img[0], 0));
+    setBitAt(&byteChunkSizeMode, 1, getBitAt(img[1], 0));
+
+    const uchar byteChunkSize = pow(2, byteChunkSizeMode);
+    if (8 % byteChunkSize != 0) {
+        printf("Byte chunk size must be a divisor of 8, but found %d\n", byteChunkSize);
+        return 1;
+    }
+
+    printf("\n");
+    printf("Byte chunk size: %d bit\n", byteChunkSize);
+
     // === Extraction du fichier ===
     // Note: Le prefix est la zone mémoire où on écrit la valeur de filelen
 
+    long imgPos = 2; // On commence au 2e composant de l'image
+
     long filelen; // La taille du fichier en bytes
     char prefixlen = sizeof(filelen); // La taille du prefix en bytes
-    char *prefixBuffer = extractNextBytes(img, prefixlen); // On extrait la valeur du préfix sous forme de buffer de char
+    char *prefixBuffer = extractBytes(img, prefixlen, byteChunkSize, imgPos); // On extrait la valeur du préfix sous forme de buffer de char
     filelen = *((long*) prefixBuffer); // On assigne la valeur (il faut caster le pointeur puis déréférencer)
+    imgPos += prefixlen * (8 / byteChunkSize); // On déplace la position de lecture dans l'image
 
-    printf("\n");
-    printf("Output file: %s%s%s\n", COLOR, OUTPUT_PATH, RESET);
-    printf("Size: %ld bytes\n", filelen);
-
-    // On commence l'extraction du fichier <prefixLen> bytes après le début de l'image
-    // unsigned char *fileStart = img + (prefixlen * (8 / BYTE_CHUNK_SIZE));
-    char *buffer = extractNextBytes(img, filelen);
+    char *buffer = extractBytes(img, filelen, byteChunkSize, imgPos); // On extrait le fichier
 
     // === Ecriture du fichier décodé ===
     
@@ -111,6 +120,7 @@ int main() {
 
     printf("Done.\n");
     printf("Output file: %s%s%s\n", COLOR, OUTPUT_PATH, RESET);
+    printf("Size: %ld bytes\n", filelen);
 
     // On libère la mémoire
     free(prefixBuffer);

@@ -13,66 +13,99 @@
 #define IMG_PATH "files/clouds.png"
 #define FILE_PATH "files/landscape.png"
 #define OUTPUT_PATH "output/out.png"
-#define BYTE_CHUNK_SIZE 4
 
-#define lastBitsMask (\
-BYTE_CHUNK_SIZE == 8 ? 0b11111111 : \
-BYTE_CHUNK_SIZE == 4 ? 0b00001111 : \
-BYTE_CHUNK_SIZE == 2 ? 0b00000011 : \
-BYTE_CHUNK_SIZE == 1 ? 0b00000001 : 0 \
-)
+/*\
+ * Modes disponibles:
+ * 0: utilisation de 1 bit par composant de pixel (pratiquement indétectable)
+ * 1: utilisation de 2 bit par composant de pixel (difficilement visible)
+ * 2: utilisation de 4 bit par composant de pixel (très visible)
+ * 3: utilisation de 8 bit par composant de pixel (l'image d'origine est complètement écrasée)
+\*/
+#define BYTE_CHUNK_SIZE_MODE 2
 
-char *buffer;
+typedef unsigned char uchar;
 
-void printBinary(char *prefix, char byte) {
-    char binaryString[] = "00000000";    
-    for (int i = 0; i < 8; i++) {
-        if (byte & ((char) pow(2, 7-i)))
-            binaryString[i] = '1';
-    }
-    printf("%s%s\n", prefix, binaryString);
+uchar getBitAt(uchar byte, uchar index) {
+    return (byte >> index) & 1;
 }
 
-char nextByteChunk() {
-    static int index = 0;
-    static int bytePos = 0;
+void setBitAt(uchar* byte, uchar index, uchar bit) {
+    bit &= 1; // On s'assure que seul le 1er bit est différent de 0
+    const uchar mask = 1 << index;
+    *byte &= ~mask;
+    *byte |= bit << index;
+}
 
-    char byteChunk = buffer[index];
-    byteChunk >>= 8 - bytePos - BYTE_CHUNK_SIZE;
-    byteChunk &= lastBitsMask;
+void writeBufferToImg(uchar* img, uchar* buffer, const long bufferLength, const uchar byteChunkSize) {
+    const uchar lastBitsMask = 
+        byteChunkSize == 8 ? 0b11111111 : 
+        byteChunkSize == 4 ? 0b00001111 : 
+        byteChunkSize == 2 ? 0b00000011 : 
+        byteChunkSize == 1 ? 0b00000001 : 0;
 
-    bytePos += BYTE_CHUNK_SIZE;
-    if (bytePos == 8) {
-        bytePos = 0;
-        index++;
+    // Le nombre de byteChunk = le nombre de bytes multiplié par le nombre de byteChunk dans 1 byte
+    const long byteChunkCount = bufferLength * (8 / byteChunkSize);
+
+    long bufferIndex = 0;
+    uchar bytePos = 0;
+    for (long imageIndex = 0; imageIndex < byteChunkCount; imageIndex++) {
+
+        // On lit le byte courant du buffer
+        uchar byte = buffer[bufferIndex];
+        // On décale le byteChunk pour qu'il soit positionné au début du byte
+        uchar byteChunk = byte >> (8 - bytePos - byteChunkSize);
+        // On met à 0 les éventuels bits qui sont à gauche du byteChunk
+        byteChunk &= lastBitsMask;
+
+        // On incrémente la position du byteChunk dans le byte
+        bytePos += byteChunkSize;
+        // Si bytePos est à 8, on passe au prochain byte
+        if (bytePos == 8) {
+            bytePos = 0;
+            bufferIndex++;
+        }
+
+        // le byte correspondant à la valeur du composant de pixel
+        uchar imageByte = img[imageIndex];
+        // On met à zéro les derniers bits du byte avec le mask
+        imageByte &= ~lastBitsMask;
+        // On ajoute le byteChunk à la place des bits qui ont été mis à zéro
+        // (on est assurés que byteChunk ne dépasse pas le nombre de bits de byteChunkSize
+        imageByte |= byteChunk;
+        // On réassigne le nouveau byte modifié à l'image
+        img[imageIndex] = imageByte;
     }
-
-    return byteChunk;
 }
 
 int main() {
-    if (8 % BYTE_CHUNK_SIZE != 0) {
-        printf("Byte chunk size must be a divisor of 8, but found %d\n", BYTE_CHUNK_SIZE);
+    const uchar byteChunkSize = pow(2, BYTE_CHUNK_SIZE_MODE);
+    if (8 % byteChunkSize != 0) {
+        printf("Byte chunk size must be a divisor of 8, but found %d\n", byteChunkSize);
         return 1;
     }
+
+    printf("Byte chunk size: %d bit\n", byteChunkSize);
 
     // Lecture des informations de l'image
 
     int width, height, channels;
-    unsigned char *img = stbi_load(IMG_PATH, &width, &height, &channels, USED_CHANNELS);
+    uchar *img = stbi_load(IMG_PATH, &width, &height, &channels, USED_CHANNELS);
     if (img == NULL) {
         printf("Error in loading the image\n");
-        return 1;        
+        return 1;
     }
 
+    printf("\n");
     printf("Base image: %s%s%s\n", COLOR, IMG_PATH, RESET);
     printf("Size: %d x %d px\n", width, height);
     printf("Used channels: %d / %d\n", USED_CHANNELS, channels);
 
-    // Le nombre de composants de pixels dans l'image
-    int imgSize = width * height * USED_CHANNELS;
+    // Ecriture du BYTE_CHUNK_SIZE_MODE sur les 2 premiers éléments de l'image
 
-    // Reading file data
+    setBitAt(img, 0, getBitAt(BYTE_CHUNK_SIZE_MODE, 0));
+    setBitAt(img + 1, 0, getBitAt(BYTE_CHUNK_SIZE_MODE, 1));
+
+    // Lecture du fichier
 
     FILE *file;
     long filelen; // Le nombre d'octets dans le fichier
@@ -89,10 +122,10 @@ int main() {
     // Note: Le prefix est la zone mémoire où on écrit la valeur de filelen
     char prefixlen = sizeof(filelen); // La taille du prefix en bytes
     long bufferlen = filelen + prefixlen; // La taille du buffer en bytes
-    buffer = malloc(bufferlen * sizeof(char));
+    uchar *buffer = malloc(bufferlen * sizeof(char));
 
     // Le fichier commence <prefixlen> bytes après le buffer
-    char *fileBytes = buffer + prefixlen;
+    uchar *fileBytes = buffer + prefixlen;
     // fread: lecture du contenu de <file> en <1> bloc de longueur <filelen>,
     // et stockage du resultat dans le buffer <fileBytes>
     fread(fileBytes, filelen, 1, file);
@@ -107,12 +140,14 @@ int main() {
     printf("Target file: %s%s%s\n", COLOR, FILE_PATH, RESET);
     printf("Size: %ld bytes\n", filelen);
 
+    // Le nombre de composants de pixels dans l'image
+    int imgSize = width * height * USED_CHANNELS;
     // Le nombre de byteChunk = le nombre de bytes multiplié par le nombre de byteChunk dans 1 byte
-    long byteChunkCount = bufferlen * (8 / BYTE_CHUNK_SIZE);
-
+    long byteChunkCount = bufferlen * (8 / byteChunkSize);
     // On s'assure que l'image est assez grande pour contenir tous les byteChunk
-    // (Chaque composant de pixel peut contenir 1 byteChunk) 
-    if (imgSize < byteChunkCount) {
+    // (Chaque composant de pixel peut contenir 1 byteChunk)
+    // On enlève 2 à imgSize car 2 composants sont révervés pour écrire BYTE_CHUNK_SIZE_MODE
+    if (imgSize - 2 < byteChunkCount) {
         printf("The image is too small to contain this file !");
         return 1;
     }
@@ -120,19 +155,8 @@ int main() {
     printf("\n");
     printf("Processing...\n");
 
-    for (int i = 0; i < byteChunkCount; i++) {
-        // On lit le prochain byteChunk du message à encoder
-        char byteChunk = nextByteChunk();
-        // le byte correspondant à la valeur du composant de pixel
-        char imageByte = img[i];
-        // On met à zéro les derniers bits du byte avec le mask
-        imageByte &= ~lastBitsMask;
-        // On ajoute le byteChunk à la place des bits qui ont été mis à zéro
-        // (on est assurés que byteChunk ne dépasse pas le nombre de bits de BYTE_CHUNK_SIZE)
-        imageByte |= byteChunk;
-        // On réassigne le nouveau byte modifié à l'image
-        img[i] = imageByte;
-    }
+    // On écrit à partir du 2e élément de img car les deux premiers sont réservés pour BYTE_CHUNK_SIZE_MODE
+    writeBufferToImg(img + 2, buffer, bufferlen, byteChunkSize);
 
     printf("Writing the resulting image to output file...\n");
     // On écrit l'image au format png:
